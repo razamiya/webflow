@@ -1,5 +1,5 @@
 /* =====================================================================
-   GLOBE ENGINE — "The Light Ahead"
+   GLOBE ENGINE — "The Light Ahead"  (v2 — realistic lighting)
    Standalone ES module. Host this file on a CDN (e.g. jsDelivr via
    GitHub) and load it from Webflow with:
 
@@ -8,37 +8,59 @@
      </script>
      <script type="module" src="YOUR_CDN_URL/globe-engine.js"></script>
 
-   WHAT THIS FILE DOES
-   - Finds (or creates) a full-screen fixed canvas and renders a
-     procedural, shader-based Earth in it.
-   - Exposes a single public control surface: window.Globe
-   - Every other piece of the experience (quiz form, scroll position,
-     toggles) talks to the globe ONLY through window.Globe — this file
-     never needs to know who is calling it.
+   WHAT'S NEW IN v2
+   - Canvas-first mounting: if you place your own
+     <canvas id="globe-canvas"> somewhere in Designer, the engine
+     renders directly into it (sized to its parent element) instead
+     of building its own full-screen background layer. Falls back to
+     the old full-screen behavior only if no such canvas is found.
+   - ResizeObserver-based sizing: the canvas now tracks the size of
+     its actual parent container, not just the browser window — so it
+     stays correct across responsive breakpoints, tab switches, etc.
+   - Realistic day/night lighting, inspired by the classic
+     "sun + terminator + Fresnel atmosphere + specular ocean glint"
+     approach used in textured Three.js Earth scenes (e.g.
+     bobbyroe/threejs-earth), adapted to our procedural (textureless)
+     shader:
+       - a soft day/night terminator instead of flat lighting
+       - a dim ambient floor so the night side isn't pure black
+       - city/data-grid lights are now dim in daylight and bright on
+         the night side, like real satellite photography
+       - a Blinn-Phong specular glint on ocean surfaces, only on the
+         sun-facing side
+       - a lightweight starfield for scene depth
 
-   MOUNT POINT
-   - By default it looks for an element with id="globe-stage" to put
-     the canvas into. If that element doesn't exist, it creates one
-     itself and appends it to <body> as a fixed full-screen layer
-     behind everything else (z-index: 0).
+   WHAT DIDN'T CHANGE
+   - The public API: window.Globe (setImpact, setImpactPercent,
+     setFromValue, adjustImpact, getImpact, getImpactPercent,
+     getRenderedImpact, onChange) — all identical to before, so
+     nothing else in your Webflow setup needs to change.
    ===================================================================== */
 
 import * as THREE from "three";
 
 (function initGlobeEngine() {
   // ---- 1. Mount point -------------------------------------------------
-  let stage = document.getElementById("globe-stage");
-  if (!stage) {
-    stage = document.createElement("div");
-    stage.id = "globe-stage";
-    stage.style.position = "fixed";
-    stage.style.inset = "0";
-    stage.style.zIndex = "0";
-    document.body.prepend(stage);
-  }
-
+  // Prefer a canvas the user placed themselves in Designer.
   let canvas = document.getElementById("globe-canvas");
-  if (!canvas) {
+  let stage;
+
+  if (canvas) {
+    // Use the canvas's own parent element as the sizing reference.
+    // No extra full-screen div is created.
+    stage = canvas.parentElement || document.body;
+  } else {
+    // Fallback: no canvas found anywhere on the page — build the
+    // old full-screen fixed background layer automatically.
+    stage = document.getElementById("globe-stage");
+    if (!stage) {
+      stage = document.createElement("div");
+      stage.id = "globe-stage";
+      stage.style.position = "fixed";
+      stage.style.inset = "0";
+      stage.style.zIndex = "0";
+      document.body.prepend(stage);
+    }
     canvas = document.createElement("canvas");
     canvas.id = "globe-canvas";
     canvas.style.display = "block";
@@ -49,12 +71,7 @@ import * as THREE from "three";
 
   // ---- 2. Renderer / scene / camera -----------------------------------
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(
-    42,
-    window.innerWidth / window.innerHeight,
-    0.1,
-    100
-  );
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   camera.position.set(1.1, 0.1, 3.6);
 
   const renderer = new THREE.WebGLRenderer({
@@ -63,23 +80,46 @@ import * as THREE from "three";
     alpha: true,
   });
   renderer.setClearColor(0x000000, 0);
-
-  // Cap pixel ratio at 2 — rendering at full retina density (3x on some
-  // phones) costs a lot of GPU time for no visible benefit.
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
 
-function resize() {
-  const width = stage.clientWidth;
-  const height = stage.clientHeight;
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height);
-}
-resize();
-new ResizeObserver(resize).observe(stage);
+  function resize() {
+    const width = stage.clientWidth || window.innerWidth;
+    const height = stage.clientHeight || window.innerHeight;
+    if (width === 0 || height === 0) return;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+  }
+  resize();
+  new ResizeObserver(resize).observe(stage);
+  window.addEventListener("resize", resize); // still catch window-level changes too
 
-  // ---- 3. Shader material ----------------------------------------------
+  // ---- 3. Starfield (lightweight scene depth) ----------------------------
+  function createStarfield() {
+    const starCount = 800;
+    const positions = new Float32Array(starCount * 3);
+    for (let i = 0; i < starCount; i++) {
+      const r = 40 + Math.random() * 20;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    const material = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 0.15,
+      sizeAttenuation: true,
+      transparent: true,
+      opacity: 0.8,
+    });
+    return new THREE.Points(geometry, material);
+  }
+  scene.add(createStarfield());
+
+  // ---- 4. Shader material -------------------------------------------------
   const globeUniforms = {
     uTime: { value: 0 },
     uImpact: { value: 0 }, // 0 = pristine nature, 1 = fully digital
@@ -90,9 +130,14 @@ new ResizeObserver(resize).observe(stage);
     uniforms: globeUniforms,
     vertexShader: `
       varying vec3 vPos;
+      varying vec3 vNormalW;
+      varying vec3 vViewDir;
       void main() {
         vPos = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        vNormalW = normalize(normalMatrix * normal);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vViewDir = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv;
       }
     `,
     fragmentShader: `
@@ -100,6 +145,8 @@ new ResizeObserver(resize).observe(stage);
       uniform float uImpact;
       uniform vec3 uLightDir;
       varying vec3 vPos;
+      varying vec3 vNormalW;
+      varying vec3 vViewDir;
 
       float hash(vec3 p) {
         return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
@@ -128,6 +175,8 @@ new ResizeObserver(resize).observe(stage);
 
       void main() {
         vec3 n = normalize(vPos);
+        vec3 N = normalize(vNormalW);
+        vec3 L = normalize(uLightDir);
 
         float land = vnoise(n * 2.3) * 0.65 + vnoise(n * 5.1 + 11.0) * 0.35;
         land = smoothstep(0.46, 0.56, land);
@@ -138,13 +187,33 @@ new ResizeObserver(resize).observe(stage);
         vec3 digitalBase = vec3(0.035, 0.038, 0.045);
         vec3 surface = mix(natureColor, digitalBase, smoothstep(0.0, 1.0, uImpact));
 
-        float diff = max(dot(n, normalize(uLightDir)), 0.16);
-        surface *= diff;
+        // --- day / night terminator: soft transition, not a hard clamp ---
+        float sunDot = dot(N, L);
+        float dayMix = smoothstep(-0.15, 0.15, sunDot);
+        float nightFactor = 1.0 - dayMix;
 
+        // Night side isn't pure black — small ambient floor, like real photos.
+        float ambientFloor = 0.14;
+        float lightAmount = mix(ambientFloor, 1.0, dayMix);
+        surface *= lightAmount;
+
+        // --- specular ocean glint (Blinn-Phong), sun-facing side only ---
+        vec3 halfDir = normalize(L + vViewDir);
+        float specAngle = max(dot(N, halfDir), 0.0);
+        float spec = pow(specAngle, 48.0) * (1.0 - land) * dayMix;
+        vec3 specColor = mix(vec3(0.6, 0.75, 0.95), vec3(1.0, 0.6, 0.3), uImpact);
+        surface += spec * specColor * 0.8;
+
+        // --- scattered lights: coarse "city" points + finer, denser field ---
         float coarse = lightDots(n, 9.0, mix(0.90, 0.62, uImpact), 0.4) * land;
         float fine = lightDots(n, 30.0, mix(0.965, 0.72, uImpact), 0.34) * land;
         float seaCables = lightDots(n, 30.0, mix(0.99, 0.88, uImpact), 0.3) * (1.0 - land) * smoothstep(0.25, 1.0, uImpact);
         float dots = clamp(coarse * 0.9 + fine * 0.8 + seaCables * 0.5, 0.0, 1.3);
+
+        // Lights are dim in daylight, bright on the night side — like real
+        // satellite photography, instead of uniformly bright everywhere.
+        float lightVisibility = mix(0.18, 1.0, nightFactor);
+        dots *= lightVisibility;
 
         float twinkle = 0.82 + 0.18 * sin(uTime * 1.6 + dot(n, vec3(12.9898, 78.233, 45.164)) * 8.0);
 
@@ -161,6 +230,7 @@ new ResizeObserver(resize).observe(stage);
   const globe = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 96), globeMaterial);
   scene.add(globe);
 
+  // ---- 5. Fresnel atmosphere rim ----------------------------------------
   const rimMaterial = new THREE.ShaderMaterial({
     uniforms: globeUniforms,
     transparent: true,
@@ -190,7 +260,7 @@ new ResizeObserver(resize).observe(stage);
   const rimMesh = new THREE.Mesh(new THREE.SphereGeometry(1.03, 64, 64), rimMaterial);
   scene.add(rimMesh);
 
-  // ---- 4. Animation loop -------------------------------------------------
+  // ---- 6. Animation loop -------------------------------------------------
   const clock = new THREE.Clock();
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   let impactTarget = 0;
@@ -210,49 +280,39 @@ new ResizeObserver(resize).observe(stage);
   }
   requestAnimationFrame(tick);
 
-  // ---- 5. Public API: window.Globe ---------------------------------------
+  // ---- 7. Public API: window.Globe ---------------------------------------
   const listeners = new Set();
 
   window.Globe = {
-    /** Set light coverage as a 0–1 fraction. */
     setImpact(value) {
       impactTarget = THREE.MathUtils.clamp(value, 0, 1);
       listeners.forEach((fn) => fn(impactTarget));
       return impactTarget;
     },
-    /** Set light coverage as a 0–100 percentage. */
     setImpactPercent(percent) {
       return this.setImpact(percent / 100);
     },
-    /** Map any raw value + its known max to 0–1 automatically. */
     setFromValue(value, max) {
       if (!max || max <= 0) return this.setImpact(0);
       return this.setImpact(value / max);
     },
-    /** Nudge the current target up/down by a delta (0–1 units). */
     adjustImpact(delta) {
       return this.setImpact(impactTarget + delta);
     },
-    /** Current target, 0–1. */
     getImpact() {
       return impactTarget;
     },
-    /** Current target, 0–100. */
     getImpactPercent() {
       return Math.round(impactTarget * 100);
     },
-    /** Currently rendered value (0–1) — lags the target slightly since it eases in. */
     getRenderedImpact() {
       return impactCurrent;
     },
-    /** Subscribe to every change. Returns an unsubscribe function. */
     onChange(fn) {
       listeners.add(fn);
       return () => listeners.delete(fn);
     },
   };
 
-  // Let the page know the engine is ready (useful if your form/script
-  // loads before this file finishes initializing).
   window.dispatchEvent(new CustomEvent("globe:ready"));
 })();
