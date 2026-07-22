@@ -69,12 +69,15 @@ import * as THREE from "three";
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
 
-  function resize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-  }
-  window.addEventListener("resize", resize);
+function resize() {
+  const width = stage.clientWidth;
+  const height = stage.clientHeight;
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+  renderer.setSize(width, height);
+}
+resize();
+new ResizeObserver(resize).observe(stage);
 
   // ---- 3. Shader material ----------------------------------------------
   const globeUniforms = {
