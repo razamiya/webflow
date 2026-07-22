@@ -1,5 +1,5 @@
 /* =====================================================================
-   GLOBE ENGINE — "The Light Ahead"  (v2 — realistic lighting, sharp coastlines)
+   GLOBE ENGINE — "The Light Ahead"  (v2 — realistic lighting)
    Standalone ES module. Host this file on a CDN (e.g. jsDelivr via
    GitHub) and load it from Webflow with:
 
@@ -7,12 +7,6 @@
      { "imports": { "three": "https://unpkg.com/three@0.165.0/build/three.module.js" } }
      </script>
      <script type="module" src="YOUR_CDN_URL/globe-engine.js"></script>
-
-   This is the version to use going forward — it reverts the v3
-   texture-based experiment (which didn't look right) back to the
-   procedural approach, with one extra fix: a third, finer noise layer
-   plus a much narrower land/ocean threshold, which gives crisper,
-   less "blobby" coastlines than the original v1/v2 procedural noise.
 
    WHAT'S NEW IN v2
    - Canvas-first mounting: if you place your own
@@ -184,8 +178,8 @@ import * as THREE from "three";
         vec3 N = normalize(vNormalW);
         vec3 L = normalize(uLightDir);
 
-        float land = vnoise(n * 2.3) * 0.6 + vnoise(n * 5.1 + 11.0) * 0.3 + vnoise(n * 12.0 + 3.0) * 0.1;
-        land = smoothstep(0.49, 0.51, land);
+        float land = vnoise(n * 2.3) * 0.65 + vnoise(n * 5.1 + 11.0) * 0.35;
+        land = smoothstep(0.46, 0.56, land);
 
         vec3 ocean = vec3(0.09, 0.20, 0.34);
         vec3 forest = vec3(0.14, 0.42, 0.28);
